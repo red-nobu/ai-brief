@@ -1,0 +1,51 @@
+# Provider per stage. ollama | gemini | groq | anthropic
+llm:
+  triage:   {provider: ollama, model: "qwen2.5:7b-instruct"}   # bulk, runs locally
+  write:    {provider: gemini, model: "gemini-3.6-flash"}      # deep read + brief; or switch to ollama
+  ollama_url: "http://localhost:11434"
+
+lookback_hours: 48          # applies to RSS + GitHub (others rely on dedupe)
+max_items_in_brief: 8
+slots:                      # long-tail items get filled first so famous names can't crowd them out
+  long_tail: 5
+  big_lab: 3
+triage:
+  max_per_source: 25        # candidates sent to the LLM per source per run
+  deep_read_top: 8
+
+# Interest keywords for the cheap pre-filter (lowercase substring match)
+interests: [speech, audio, voice, tts, asr, text-to-speech, music, sound, translation, multilingual,
+            image, vision, video, diffusion, multimodal, omni, vlm, captioning, segmentation,
+            generation, any-to-any, codec, tokenizer, lip, dubbing, ocr]
+
+# Orgs counted as "big lab" for slot allocation. Match is case-insensitive on org/owner/feed name.
+# NOTE: arXiv gives no affiliations, so arXiv papers count as long-tail unless HF lists an org.
+big_orgs: [openai, google, deepmind, meta, facebook, microsoft, nvidia, anthropic, apple, amazon,
+           alibaba, qwen, tencent, baidu, bytedance, mistral, stability, black-forest-labs]
+
+sources:
+  arxiv:
+    categories: [cs.SD, eess.AS, cs.CV, cs.CL, cs.MM, eess.IV]
+    max_results: 150
+  huggingface:
+    pipeline_tags: [text-to-speech, automatic-speech-recognition, audio-to-audio, text-to-audio,
+                    translation, text-to-image, image-to-image, image-to-text, text-to-video,
+                    image-text-to-text, any-to-any]
+    limit_per_tag: 30
+    daily_papers: true
+  github:
+    queries: ["text-to-speech", "speech recognition", "multimodal", "diffusion model",
+              "speech translation", "video generation", "audio generation", "vision language model"]
+    min_stars: 2             # noise floor; brand-new repos rarely have many stars
+    per_query: 15
+  modelscope:
+    page_size: 40
+  rss:
+    feeds:
+      - {name: HuggingFace Blog, url: "https://huggingface.co/blog/feed.xml"}
+      - {name: Google AI,        url: "https://blog.google/technology/ai/rss/"}
+      - {name: OpenAI,           url: "https://openai.com/news/rss.xml"}
+      - {name: BAIR,             url: "https://bair.berkeley.edu/blog/feed.xml"}
+      - {name: Qwen,             url: "https://qwenlm.github.io/blog/index.xml"}
+      - {name: Apple ML,         url: "https://machinelearning.apple.com/rss.xml"}
+      # add smaller labs / university groups here (any RSS or Atom URL)
