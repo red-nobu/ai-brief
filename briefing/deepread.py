@@ -8,7 +8,8 @@ from .fetch import full_text
 log = logging.getLogger("briefing")
 SYSTEM = """Extract facts from the text. Reply ONLY JSON:
 {"method":"1-2 sentences on how it works","claims":["..."],"numbers":["metric: value on dataset vs baseline, only if stated"],
- "caveats":["..."],"weights_released":true|false|null,"claims_sota":true|false,"sota_has_baselines":true|false}
+ "caveats":["..."],"weights_released":true|false|null,"license":"licence name exactly as the text states it, else null",
+ "claims_sota":true|false,"sota_has_baselines":true|false}
 Only state what the text says. If a claim has no numbers or baselines, set sota_has_baselines=false. Never invent numbers."""
 
 

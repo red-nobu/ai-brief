@@ -4,10 +4,13 @@ import re
 from . import llm
 from .deepread import confidence_tag
 
-SYSTEM = """You write a concise daily briefing on new multimodal AI work (audio/speech, image, video, translation).
+SYSTEM = """You write a concise daily briefing on new audio and speech AI work: speech recognition / transcription,
+diarisation, speaker identification and verification, language and gender ID, target-speaker extraction, speech
+enhancement, audio/speaker embeddings, audio LLMs, and new training or inference methods for these.
 You get pre-extracted notes per item. Rules: use only the notes given; never add numbers or claims that are not
-in them; keep the confidence tag exactly as given; call benchmark numbers 'self-reported'. Per item: the title as a
-Markdown link, 2-3 sentences (what is new, how it works, why it matters), then 'Confidence: <tag>'.
+in them; keep the open-weights label and the confidence tag exactly as given; call benchmark numbers 'self-reported'.
+Per item: the title as a Markdown link, 2-3 sentences (what is new, how it works, why it matters), then
+'Open weights: <label>', then 'Confidence: <tag>'.
 Group into two sections: '## Under the radar' and '## Big labs' using each item's GROUP field. Output Markdown only."""
 
 
@@ -19,10 +22,38 @@ def is_big(item, big_orgs):
     return any(re.search(rf"(?<![a-z0-9]){re.escape(b)}(?![a-z0-9])", hay) for b in big_orgs)
 
 
+def open_label(item):
+    """Open-weights label. Best evidence first: the Hub's own licence tag, then what the deep read found in the
+    text, then (only if both are silent) the triage openness score."""
+    m = item.meta
+    d = m.get("deep") or {}
+    lic = m.get("license") or d.get("license")
+    lic = lic.strip()[:40] if isinstance(lic, str) and lic.strip() else None
+    if item.source in ("hf_model", "modelscope") or d.get("weights_released") is True:
+        return f"yes (licence: {lic})" if lic else "yes (licence not stated)"
+    if d.get("weights_released") is False:
+        return "no weights released"
+    o = m["triage"].get("openness", 0)
+    if o >= 9:
+        return "open (permissive licence)"
+    if o >= 7:
+        return "open (restricted licence)"
+    if o >= 5:
+        return "partial (weights or code only)"
+    if o >= 3:
+        return "announced, not yet released"
+    if o >= 2:
+        return "unclear (not stated)"
+    return "closed / API-only"
+
+
 def select(items, cfg):
     """Fill long-tail slots first, then big-lab slots, then top up from whatever remains."""
     big_orgs = cfg["big_orgs"]
-    ranked = sorted((i for i in items if "triage" in i.meta), key=lambda i: i.meta["triage"]["total"], reverse=True)
+    floor = cfg["triage"].get("min_total", 0)   # don't pad the brief with weak items
+    ranked = sorted((i for i in items if "triage" in i.meta
+                     and (i.meta["triage"]["kind"] == "unscored" or i.meta["triage"]["total"] >= floor)),
+                    key=lambda i: i.meta["triage"]["total"], reverse=True)
     for i in ranked:
         i.meta["big_lab"] = is_big(i, big_orgs)
     chosen = []
@@ -41,7 +72,7 @@ def fallback_markdown(items):
     for i in items:
         d = i.meta.get("deep") or {}
         line = (f"- [{i.title}]({i.url}) ({i.source})\n  {i.meta['triage']['one_line'] or d.get('method', '')}\n"
-                f"  Confidence: {confidence_tag(i)}")
+                f"  Open weights: {open_label(i)}\n  Confidence: {confidence_tag(i)}")
         out["Big labs" if i.meta.get("big_lab") else "Under the radar"].append(line)
     return "\n\n".join(f"## {k}\n" + "\n".join(v) for k, v in out.items() if v)
 
@@ -57,7 +88,7 @@ def compose(items, cfg, use_llm=True):
         blocks.append(f"TITLE: {i.title}\nURL: {i.url}\nGROUP: {'Big labs' if i.meta.get('big_lab') else 'Under the radar'}\n"
                       f"KIND: {i.meta['triage']['kind']}\nSUMMARY: {i.meta['triage']['one_line']}\n"
                       f"METHOD: {d.get('method', '')}\nCLAIMS: {d.get('claims', [])}\nNUMBERS: {d.get('numbers', [])}\n"
-                      f"CAVEATS: {d.get('caveats', [])}\nCONFIDENCE TAG: {confidence_tag(i)}")
+                      f"CAVEATS: {d.get('caveats', [])}\nOPEN WEIGHTS: {open_label(i)}\nCONFIDENCE TAG: {confidence_tag(i)}")
     try:
         return llm.chat(cfg["llm"]["write"], SYSTEM, "\n\n".join(blocks), cfg["llm"].get("ollama_url", ""))
     except Exception as e:

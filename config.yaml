@@ -1,51 +1,104 @@
 # Provider per stage. ollama | gemini | groq | anthropic
 llm:
-  triage:   {provider: ollama, model: "qwen2.5:7b-instruct"}   # bulk, runs locally
-  write:    {provider: gemini, model: "gemini-3.6-flash"}      # deep read + brief; or switch to ollama
+  # Check this first (from the project root, models pulled with `ollama pull <name>`):
+  #   uv run python triage_smoketest.py --prompt rubric.md --models qwen3.5:9b qwen3:8b qwen2.5:7b-instruct
+  # think: false  -> skip the reasoning pass of qwen3 / qwen3.5 (far too slow for bulk triage otherwise).
+  #                  A model with no thinking mode (qwen2.5) is retried without the flag automatically.
+  # options       -> sent to Ollama as-is. Its default context window is small and silently truncates, so set num_ctx.
+  # To try a bigger model later: "qwen3:8b" or "qwen3.5:9b" (same think / options).
+  triage:   {provider: ollama, model: "qwen2.5:7b-instruct", think: false, options: {temperature: 0, num_ctx: 4096}}
+  write:    {provider: gemini, model: "gemini-3.6-flash"}   # newer: 3.7 / 3.8 Flash
+  # All-local alternative (one model for triage AND writing/deep-read). Swap the line above for this one;
+  # the brief packs 8 items into one prompt, so it needs a much larger num_ctx than triage:
+  # write:  {provider: ollama, model: "qwen3.5:9b", think: false, options: {temperature: 0.2, num_ctx: 16384}}
   ollama_url: "http://localhost:11434"
 
-lookback_hours: 48          # applies to RSS + GitHub (others rely on dedupe)
+lookback_hours: 168         # applies to RSS + GitHub only; was 48 and returned 1 item each. The store's dedupe prevents repeats
 max_items_in_brief: 8
 slots:                      # long-tail items get filled first so famous names can't crowd them out
   long_tail: 5
   big_lab: 3
 triage:
-  max_per_source: 25        # candidates sent to the LLM per source per run
+  max_per_source: 40        # was 25. Audio-only arXiv is dense; raise/lower after timing a run
+  source_caps: {hf_model: 80}   # HF is split fairly across tags inside this cap (see filter.py)
   deep_read_top: 8
+  min_relevance: 3          # triage relevance below this (TTS, music, non-audio) is dropped outright
+  relevance_gate: 8         # total is scaled by min(1, relevance/8): off-topic can't win on other scores
+  skip_derivatives: [converted, adapter, merge]   # GGUF/AWQ/ONNX copies, LoRA adapters, merges of someone else's model
+                            # (finetunes still go to triage and are scored as finetunes; the watchlist is never skipped)
+  min_total: 3.0            # don't pad the brief with weak items. Tune with --dry-run
+                            # (typical totals: marketing ~2.5, incremental ~4, solid ~5.5-7)
 
-# Interest keywords for the cheap pre-filter (lowercase substring match)
-interests: [speech, audio, voice, tts, asr, text-to-speech, music, sound, translation, multilingual,
-            image, vision, video, diffusion, multimodal, omni, vlm, captioning, segmentation,
-            generation, any-to-any, codec, tokenizer, lip, dubbing, ocr]
+# Interest keywords for the cheap pre-filter (lowercase SUBSTRING match).
+# Deliberately no image/video words. Fragments are chosen to avoid known false hits:
+# no "lip" (multiplication), no "vad" (invade), no "nemo" (mnemonic), no bare
+# "denois" (every diffusion paper says "denoising"), no bare "embedding" (text embeddings).
+interests: [
+  # broad nets
+  speech, audio, voice, spoken, acoustic, omni, any-to-any,
+  # transcription / ASR
+  asr, transcri, speech-to-text, speech to text, conformer, transducer,
+  # diarisation / VAD / speaker
+  diariz, diaris, speaker, voice activity,
+  # language / gender id
+  language identification, language id, gender recognition, gender classification, gender identification,
+  # extraction / separation / enhancement
+  target speaker, target-speaker, speech separation, source separation, cocktail party,
+  speech enhancement, noise suppression, speech denois, audio denois, dereverb, noisy speech,
+  # audio LLMs
+  audio language model, audio llm, speech llm, spoken language model, speech-to-speech, full-duplex,
+  # model / dataset names that signal a relevant paper even without the words above
+  whisper, parakeet, canary, wav2vec, hubert, wavlm, ecapa, titanet, pyannote, silero, wespeaker,
+  voxceleb, librispeech, fleurs, dihard, voxconverse,
+]
 
-# Orgs counted as "big lab" for slot allocation. Match is case-insensitive on org/owner/feed name.
-# NOTE: arXiv gives no affiliations, so arXiv papers count as long-tail unless HF lists an org.
+# Orgs counted as "big lab" for slot allocation. Matched as WHOLE WORDS (so "mistral" does not match the
+# HF org "mistralai": both are listed). Includes the academic groups you named. NOTE: arXiv gives no
+# affiliations, so arXiv papers count as long-tail unless HF lists an org.
 big_orgs: [openai, google, deepmind, meta, facebook, microsoft, nvidia, anthropic, apple, amazon,
-           alibaba, qwen, tencent, baidu, bytedance, mistral, stability, black-forest-labs]
+           alibaba, qwen, funaudiollm, tencent, baidu, bytedance, mistral, mistralai, deepseek,
+           cohere, coherelabs, cohereforai, tsinghua, jhu-clsp, johns hopkins, but-fit, butspeechfit,
+           espnet, idiap, fbk, hlt-mt, mila]
 
 sources:
   arxiv:
-    categories: [cs.SD, eess.AS, cs.CV, cs.CL, cs.MM, eess.IV]
-    max_results: 150
+    # cs.CL dropped on purpose: it is huge and text-only, and the cap below is applied across
+    # categories, so it would push audio papers out. Audio-LLM papers are almost always
+    # cross-listed to cs.SD or eess.AS anyway (the API's cat: query matches cross-lists).
+    categories: [cs.SD, eess.AS]
+    max_results: 200
   huggingface:
-    pipeline_tags: [text-to-speech, automatic-speech-recognition, audio-to-audio, text-to-audio,
-                    translation, text-to-image, image-to-image, image-to-text, text-to-video,
-                    image-text-to-text, any-to-any]
-    limit_per_tag: 30
+    # Verified valid Hub tags. Speaker ID / language ID live under audio-classification.
+    pipeline_tags: [automatic-speech-recognition, audio-classification, audio-to-audio,
+                    voice-activity-detection, audio-text-to-text, any-to-any]
+    lookback_hours: 48      # page through everything created in the window (daily runs left gaps before)
+    max_per_tag: 100        # hard cap per tag inside that window
+    trending_per_tag: 10    # plus the top-N trending per tag, even if uploaded days ago
+    trending_max_age_days: 30   # ...but not years ago (whisper-large-v3 was trending forever)
+    limit_per_tag: 40       # only used if lookback_hours is removed (old behaviour)
+    watch_authors: [JaesungHuh]   # always reach triage, bypass keywords and caps. Add other HF users/orgs
     daily_papers: true
   github:
-    queries: ["text-to-speech", "speech recognition", "multimodal", "diffusion model",
-              "speech translation", "video generation", "audio generation", "vision language model"]
+    queries: ["speech recognition", "speaker diarization", "speaker verification",
+              "speech enhancement", "target speaker extraction", "speaker embedding",
+              "language identification speech", "audio language model",
+              "streaming asr", "voice activity detection"]
     min_stars: 2             # noise floor; brand-new repos rarely have many stars
     per_query: 15
   modelscope:
     page_size: 40
   rss:
     feeds:
+      # kept from before
       - {name: HuggingFace Blog, url: "https://huggingface.co/blog/feed.xml"}
       - {name: Google AI,        url: "https://blog.google/technology/ai/rss/"}
       - {name: OpenAI,           url: "https://openai.com/news/rss.xml"}
       - {name: BAIR,             url: "https://bair.berkeley.edu/blog/feed.xml"}
       - {name: Qwen,             url: "https://qwenlm.github.io/blog/index.xml"}
       - {name: Apple ML,         url: "https://machinelearning.apple.com/rss.xml"}
-      # add smaller labs / university groups here (any RSS or Atom URL)
+      # added, URLs from memory and NOT verified. Delete any that error on the first run.
+      - {name: NVIDIA Technical Blog, url: "https://developer.nvidia.com/blog/feed/"}
+      - {name: Microsoft Research,    url: "https://www.microsoft.com/en-us/research/feed/"}
+      - {name: Google Research,       url: "https://research.google/blog/rss/"}
+      - {name: Google DeepMind,       url: "https://deepmind.google/blog/rss.xml"}
+      - {name: Amazon Science,        url: "https://www.amazon.science/index.rss"}
